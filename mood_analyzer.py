@@ -9,6 +9,7 @@ This class starts with very simple logic:
   - Convert that score into a mood label
 """
 
+import re
 from typing import List, Dict, Tuple, Optional
 
 from dataset import POSITIVE_WORDS, NEGATIVE_WORDS
@@ -32,6 +33,97 @@ class MoodAnalyzer:
         self.positive_words = set(w.lower() for w in positive_words)
         self.negative_words = set(w.lower() for w in negative_words)
 
+    def _analyze_text(self, text: str) -> Tuple[int, int, int]:
+      """
+      Return aggregate sentiment signals for a text.
+
+      Returns:
+        (score, positive_hits, negative_hits)
+      """
+      tokens = self.preprocess(text)
+      score = 0
+      positive_hits = 0
+      negative_hits = 0
+
+      negation_words = {
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "wasnt",
+        "isnt",
+        "arent",
+        "werent",
+        "dont",
+        "doesnt",
+        "didnt",
+        "cant",
+        "couldnt",
+        "wouldnt",
+        "shouldnt",
+        "wont",
+      }
+      positive_extras = {
+        "fire",
+        "lit",
+        "yay",
+        "pumped",
+        "hopeful",
+        "proud",
+        "sick",
+        "dope",
+        "slaps",
+        "vibing",
+        ":)",
+        "😂",
+        "mixed"
+      }
+      negative_extras = {
+        "ugh",
+        "meh",
+        "stuck",
+        "disappointed",
+        "exhausted",
+        "trash",
+        "mid",
+        "cringe",
+        "wack",
+        "🥲",
+        ":(",
+        "💀",
+        "mixed"
+      }
+
+      i = 0
+      while i < len(tokens):
+        token = tokens[i]
+
+        # Handle simple negation by flipping the next known sentiment token.
+        is_negation = token in negation_words or token.endswith("n't")
+        if is_negation and i + 1 < len(tokens):
+          nxt = tokens[i + 1]
+          if nxt in self.positive_words or nxt in positive_extras:
+            score -= 1
+            negative_hits += 1
+            i += 2
+            continue
+          if nxt in self.negative_words or nxt in negative_extras:
+            score += 1
+            positive_hits += 1
+            i += 2
+            continue
+
+        if token in self.positive_words or token in positive_extras:
+          score += 1
+          positive_hits += 1
+        if token in self.negative_words or token in negative_extras:
+          score -= 1
+          negative_hits += 1
+
+        i += 1
+
+      return score, positive_hits, negative_hits
+
     # ---------------------------------------------------------------------
     # Preprocessing
     # ---------------------------------------------------------------------
@@ -53,7 +145,12 @@ class MoodAnalyzer:
           - Normalize repeated characters ("soooo" -> "soo")
         """
         cleaned = text.strip().lower()
-        tokens = cleaned.split()
+        # Collapse long character runs ("soooo" -> "soo") to reduce sparsity.
+        cleaned = re.sub(r"(.)\\1{2,}", r"\\1\\1", cleaned)
+
+        # Keep simple words, numbers, and a few high-signal emoji/emoticons.
+        token_pattern = r"[a-z]+(?:'[a-z]+)?|\\d+|:\)|:\(|🥲|😂|💀"
+        tokens = re.findall(token_pattern, cleaned)
 
         return tokens
 
@@ -75,15 +172,8 @@ class MoodAnalyzer:
           - Give some words higher weights than others (for example "hate" < "annoyed")
           - Treat emojis or slang (":)", "lol", "💀") as strong signals
         """
-        # TODO: Implement this method.
-        #   1. Call self.preprocess(text) to get tokens.
-        #   2. Loop over the tokens.
-        #   3. Increase the score for positive words, decrease for negative words.
-        #   4. Return the total score.
-        #
-        # Hint: if you implement negation, you may want to look at pairs of tokens,
-        # like ("not", "happy") or ("never", "fun").
-        pass
+        score, _, _ = self._analyze_text(text)
+        return score
 
     # ---------------------------------------------------------------------
     # Label prediction
@@ -105,12 +195,23 @@ class MoodAnalyzer:
         Just remember that whatever labels you return should match the labels
         you use in TRUE_LABELS in dataset.py if you care about accuracy.
         """
-        # TODO: Implement this method.
-        #   1. Call self.score_text(text) to get the numeric score.
-        #   2. Return "positive" if the score is above 0.
-        #   3. Return "negative" if the score is below 0.
-        #   4. Return "neutral" otherwise.
-        pass
+        score, positive_hits, negative_hits = self._analyze_text(text)
+        tokens = self.preprocess(text)
+
+        # Treat weak positivity with uncertainty language as neutral.
+        hedging_tokens = {"idk", "just", "weird", "kinda", "kind", "sorta", "maybe"}
+        has_hedge = any(token in hedging_tokens for token in tokens)
+
+        # Mixed means we found both positive and negative evidence.
+        if positive_hits > 0 and negative_hits > 0:
+            return "mixed"
+        if score == 1 and negative_hits == 0 and has_hedge:
+          return "neutral"
+        if score > 0:
+            return "positive"
+        if score < 0:
+            return "negative"
+        return "neutral"
 
     # ---------------------------------------------------------------------
     # Explanations (optional but recommended)
